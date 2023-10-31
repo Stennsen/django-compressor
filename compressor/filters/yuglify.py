@@ -6,12 +6,12 @@ class YUglifyFilter(CompilerFilter):
     command = "{binary} {args}"
 
     def __init__(self, *args, **kwargs):
-        super(YUglifyFilter, self).__init__(*args, **kwargs)
-        self.command += ' --type=%s' % self.type
+        super().__init__(*args, **kwargs)
+        self.command += " --type=%s" % self.type
 
 
 class YUglifyCSSFilter(YUglifyFilter):
-    type = 'css'
+    type = "css"
     options = (
         ("binary", settings.COMPRESS_YUGLIFY_BINARY),
         ("args", settings.COMPRESS_YUGLIFY_CSS_ARGUMENTS),
@@ -19,7 +19,7 @@ class YUglifyCSSFilter(YUglifyFilter):
 
 
 class YUglifyJSFilter(YUglifyFilter):
-    type = 'js'
+    type = "js"
     options = (
         ("binary", settings.COMPRESS_YUGLIFY_BINARY),
         ("args", settings.COMPRESS_YUGLIFY_JS_ARGUMENTS),

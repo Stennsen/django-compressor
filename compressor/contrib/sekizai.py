@@ -37,16 +37,16 @@ def compress(context, data, name):
             kind = 'css'
 
     parser = get_class(settings.COMPRESS_PARSER)(data)
-    js_compressor, css_compressor = Compressor('js'), Compressor('css')
+    js_compressor, css_compressor = Compressor("js"), Compressor("css")
     compressable_elements, expanded_elements, deferred_elements = [], [], []
     if kind == 'js':
         for elem in parser.js_elems():
             attribs = parser.elem_attribs(elem)
             try:
-                if 'src' in attribs:
-                    js_compressor.get_basename(attribs['src'])
+                if "src" in attribs:
+                    js_compressor.get_basename(attribs["src"])
             except UncompressableFileError:
-                if 'defer' in attribs:
+                if "defer" in attribs:
                     deferred_elements.append(elem)
                 else:
                     expanded_elements.append(elem)
@@ -56,8 +56,11 @@ def compress(context, data, name):
         for elem in parser.css_elems():
             attribs = parser.elem_attribs(elem)
             try:
-                if parser.elem_name(elem) == 'link' and attribs['rel'].lower() == 'stylesheet':
-                    css_compressor.get_basename(attribs['href'])
+                if (
+                    parser.elem_name(elem) == "link"
+                    and attribs["rel"].lower() == "stylesheet"
+                ):
+                    css_compressor.get_basename(attribs["href"])
             except UncompressableFileError:
                 expanded_elements.append(elem)
             else:

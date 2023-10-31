@@ -69,7 +69,7 @@ Backend settings
 
 .. attribute:: COMPRESS_FILTERS
 
-    :default: ``{'css': ['compressor.filters.css_default.CssAbsoluteFilter'], 'js': ['compressor.filters.jsmin.JSMinFilter']}``
+    :default: ``{'css': ['compressor.filters.css_default.CssAbsoluteFilter', 'compressor.filters.cssmin.rCSSMinFilter'], 'js': ['compressor.filters.jsmin.rJSMinFilter']}``
 
     A mapping of resource kinds to the list of filters to apply.
     The key is used to refer to this resource type in templates
@@ -83,7 +83,7 @@ Backend settings
 
       .. _compress_css_filters:
 
-      :default: ``['compressor.filters.css_default.CssAbsoluteFilter']``
+      :default: ``['compressor.filters.css_default.CssAbsoluteFilter', 'compressor.filters.cssmin.rCSSMinFilter']``
 
       A list of filters that will be applied to CSS.
 
@@ -190,23 +190,16 @@ Backend settings
 
       .. _compress_js_filters:
 
-      :Default: ``['compressor.filters.jsmin.JSMinFilter']``
+      :Default: ``['compressor.filters.jsmin.rJSMinFilter']``
 
       A list of filters that will be applied to javascript.
 
       Possible options are:
 
-      - ``compressor.filters.jsmin.JSMinFilter``
+      - ``compressor.filters.jsmin.rJSMinFilter``
 
         A filter that uses the jsmin implementation rJSmin_ to compress
         JavaScript code (installed by default).
-
-      .. _slimit_filter:
-
-      - ``compressor.filters.jsmin.SlimItFilter``
-
-        A filter that uses the jsmin implementation `Slim It`_ to compress
-        JavaScript code.
 
       .. _calmjs_filter:
 
@@ -233,10 +226,12 @@ Backend settings
         A filter that passes the JavaScript code to the `YUI compressor`_.
 
         .. attribute:: COMPRESS_YUI_BINARY
+          :noindex:
 
            The YUI compressor filesystem path.
 
         .. attribute:: COMPRESS_YUI_JS_ARGUMENTS
+          :noindex:
 
            The arguments passed to the compressor.
 
@@ -245,10 +240,12 @@ Backend settings
         A filter that passes the JavaScript code to the `yUglify compressor`_.
 
         .. attribute:: COMPRESS_YUGLIFY_BINARY
+          :noindex:
 
            The yUglify compressor filesystem path.
 
         .. attribute:: COMPRESS_YUGLIFY_JS_ARGUMENTS
+          :noindex:
 
            The arguments passed to the compressor.
 
@@ -257,6 +254,7 @@ Backend settings
         A filter that renders the JavaScript code with Django templating system.
 
         .. attribute:: COMPRESS_TEMPLATE_FILTER_CONTEXT
+          :noindex:
 
            The context to render your JavaScript code with.
 
@@ -266,20 +264,6 @@ Backend settings
       .. _`yUglify compressor`: https://github.com/yui/yuglify
       .. _`Slim It`: https://github.com/rspivak/slimit
       .. _`Calmjs`: https://github.com/calmjs/calmjs.parse
-
-.. attribute:: COMPRESS_CSS_FILTERS
-
-    Backwards-compatible alias for the ``'css'`` key of
-    :attr:`~django.conf.settings.COMPRESS_FILTERS`.
-    If you haven't defined that key you can still continue
-    using this setting, although we encourage you to convert it to the new form.
-
-.. attribute:: COMPRESS_JS_FILTERS
-
-    Backwards-compatible alias for the ``'js'`` key of
-    :attr:`~django.conf.settings.COMPRESS_FILTERS`.
-    If you haven't defined that key you can still continue
-    using this setting, although we encourage you to convert it to the new form.
 
 .. attribute:: COMPRESS_PRECOMPILERS
 
@@ -562,3 +546,26 @@ Offline settings
 
     The name of the file to be used for saving the names of the files
     compressed offline.
+
+.. attribute:: COMPRESS_OFFLINE_MANIFEST_STORAGE
+
+    :Default: ``compressor.storage.OfflineManifestFileStorage``
+
+    The dotted path to a Django Storage backend to be used to save the
+    offline manifest.
+
+    By default, the file configured with
+    :attr:`~django.conf.settings.COMPRESS_OFFLINE_MANIFEST` will be stored
+    into :attr:`~django.conf.settings.COMPRESS_OUTPUT_DIR`.
+
+    An example to output the manifest into the project's root directory::
+
+        # project/settings.py:
+        COMPRESS_OFFLINE_MANIFEST_STORAGE = 'project.module.PrivateOfflineManifestFileStorage'
+
+        # project/module.py:
+        from compressor.storage import OfflineManifestFileStorage
+        from django.conf import settings
+        class PrivateOfflineManifestFileStorage(OfflineManifestFileStorage):
+            def __init__(self, *args, **kwargs):
+                super().__init__(settings.BASE_DIR, None, *args, **kwargs)

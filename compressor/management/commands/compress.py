@@ -1,6 +1,8 @@
 # flake8: noqa
 import os
 import sys
+import concurrent.futures
+from threading import Lock
 
 from collections import OrderedDict, defaultdict
 from fnmatch import fnmatch
@@ -11,44 +13,78 @@ from django.core.management.base import BaseCommand, CommandError
 import django.template
 from django.template import Context
 from django.utils.encoding import smart_str
-from django.template.loader import get_template  # noqa Leave this in to preload template locations
+from django.template.loader import (
+    get_template,
+)  # noqa Leave this in to preload template locations
 from django.template import engines
 
-from compressor.cache import get_offline_hexdigest, write_offline_manifest, get_offline_manifest
+from compressor.cache import (
+    get_offline_hexdigest,
+    write_offline_manifest,
+    get_offline_manifest,
+)
 from compressor.conf import settings
-from compressor.exceptions import (OfflineGenerationError, TemplateSyntaxError,
-                                   TemplateDoesNotExist)
+from compressor.exceptions import (
+    OfflineGenerationError,
+    TemplateSyntaxError,
+    TemplateDoesNotExist,
+)
 from compressor.utils import get_mod_func
+
+offline_manifest_lock = Lock()
 
 
 class Command(BaseCommand):
     help = "Compress content outside of the request/response cycle"
 
+    requires_system_checks = []
+
     def add_arguments(self, parser):
-        parser.add_argument('--extension', '-e', action='append', dest='extensions',
-                            help='The file extension(s) to examine (default: ".html", '
-                                 'separate multiple extensions with commas, or use -e '
-                                 'multiple times)')
-        parser.add_argument('-f', '--force', default=False, action='store_true',
-                            help="Force the generation of compressed content even if the "
-                                 "COMPRESS_ENABLED setting is not True.", dest='force')
-        parser.add_argument('--follow-links', default=False, action='store_true',
-                            help="Follow symlinks when traversing the COMPRESS_ROOT "
-                                 "(which defaults to STATIC_ROOT). Be aware that using this "
-                                 "can lead to infinite recursion if a link points to a parent "
-                                 "directory of itself.", dest='follow_links')
-        parser.add_argument('--engine', default=[], action="append",
-                            help="Specifies the templating engine. jinja2 and django are "
-                                 "supported. It may be a specified more than once for "
-                                 "multiple engines. If not specified, django engine is used.",
-                            dest="engines")
+        parser.add_argument(
+            "--extension",
+            "-e",
+            action="append",
+            dest="extensions",
+            help='The file extension(s) to examine (default: ".html", '
+            "separate multiple extensions with commas, or use -e "
+            "multiple times)",
+        )
+        parser.add_argument(
+            "-f",
+            "--force",
+            default=False,
+            action="store_true",
+            help="Force the generation of compressed content even if the "
+            "COMPRESS_ENABLED setting is not True.",
+            dest="force",
+        )
+        parser.add_argument(
+            "--follow-links",
+            default=False,
+            action="store_true",
+            help="Follow symlinks when traversing the COMPRESS_ROOT "
+            "(which defaults to STATIC_ROOT). Be aware that using this "
+            "can lead to infinite recursion if a link points to a parent "
+            "directory of itself.",
+            dest="follow_links",
+        )
+        parser.add_argument(
+            "--engine",
+            default=[],
+            action="append",
+            help="Specifies the templating engine. jinja2 and django are "
+            "supported. It may be a specified more than once for "
+            "multiple engines. If not specified, django engine is used.",
+            dest="engines",
+        )
 
     def get_loaders(self):
         template_source_loaders = []
         for e in engines.all():
-            if hasattr(e, 'engine'):
+            if hasattr(e, "engine"):
                 template_source_loaders.extend(
-                    e.engine.get_template_loaders(e.engine.loaders))
+                    e.engine.get_template_loaders(e.engine.loaders)
+                )
         loaders = []
         # If template loader is CachedTemplateLoader, return the loaders
         # that it wraps around. So if we have
@@ -63,7 +99,7 @@ class Command(BaseCommand):
         # The cached Loader and similar ones include a 'loaders' attribute
         # so we look for that.
         for loader in template_source_loaders:
-            if hasattr(loader, 'loaders'):
+            if hasattr(loader, "loaders"):
                 loaders.extend(loader.loaders)
             else:
                 loaders.append(loader)
@@ -71,15 +107,16 @@ class Command(BaseCommand):
 
     def __get_parser(self, engine):
         charset = (
-            settings.FILE_CHARSET if settings.is_overridden('FILE_CHARSET')
-            else 'utf-8'
+            settings.FILE_CHARSET if settings.is_overridden("FILE_CHARSET") else "utf-8"
         )
         if engine == "jinja2":
             from compressor.offline.jinja2 import Jinja2Parser
+
             env = settings.COMPRESS_JINJA2_GET_ENVIRONMENT()
             parser = Jinja2Parser(charset=charset, env=env)
         elif engine == "django":
             from compressor.offline.django import DjangoParser
+
             parser = DjangoParser(charset=charset)
         else:
             raise OfflineGenerationError("Invalid templating engine specified.")
@@ -96,51 +133,67 @@ class Command(BaseCommand):
         """
 
         if not self.get_loaders():
-            raise OfflineGenerationError("No template loaders defined. You "
-                                         "must set TEMPLATE_LOADERS in your "
-                                         "settings or set 'loaders' in your "
-                                         "TEMPLATES dictionary.")
+            raise OfflineGenerationError(
+                "No template loaders defined. You "
+                "must set TEMPLATE_LOADERS in your "
+                "settings or set 'loaders' in your "
+                "TEMPLATES dictionary."
+            )
         templates = set()
-        if engine == 'django':
+        if engine == "django":
             paths = set()
             for loader in self.get_loaders():
                 try:
                     module = import_module(loader.__module__)
-                    get_template_sources = getattr(module,
-                        'get_template_sources', None)
+                    get_template_sources = getattr(module, "get_template_sources", None)
                     if get_template_sources is None:
                         get_template_sources = loader.get_template_sources
-                    paths.update(smart_str(origin) for origin in get_template_sources(''))
+                    paths.update(
+                        smart_str(origin) for origin in get_template_sources("")
+                    )
                 except (ImportError, AttributeError, TypeError):
                     # Yeah, this didn't work out so well, let's move on
                     pass
 
             if not paths:
-                raise OfflineGenerationError("No template paths found. None of "
-                                             "the configured template loaders "
-                                             "provided template paths. See "
-                                             "https://docs.djangoproject.com/en/2.1/topics/templates/ "
-                                             "for more information on template "
-                                             "loaders.")
+                raise OfflineGenerationError(
+                    "No template paths found. None of "
+                    "the configured template loaders "
+                    "provided template paths. See "
+                    "https://docs.djangoproject.com/en/2.1/topics/templates/ "
+                    "for more information on template "
+                    "loaders."
+                )
             if verbosity >= 2:
                 log.write("Considering paths:\n\t" + "\n\t".join(paths) + "\n")
 
             for path in paths:
                 for root, dirs, files in os.walk(path, followlinks=follow_links):
-                    templates.update(os.path.relpath(os.path.join(root, name), path)
-                        for name in files if not name.startswith('.') and
-                            any(fnmatch(name, "*%s" % glob) for glob in extensions))
-        elif engine == 'jinja2':
+                    templates.update(
+                        os.path.relpath(os.path.join(root, name), path)
+                        for name in files
+                        if not name.startswith(".")
+                        and any(fnmatch(name, "*%s" % glob) for glob in extensions)
+                    )
+        elif engine == "jinja2":
             env = settings.COMPRESS_JINJA2_GET_ENVIRONMENT()
-            if env and hasattr(env, 'list_templates'):
-                templates |= set([env.loader.get_source(env, template)[1] for template in
-                            env.list_templates(filter_func=lambda _path:
-                            os.path.splitext(_path)[-1] in extensions)])
+            if env and hasattr(env, "list_templates"):
+                templates |= set(
+                    [
+                        env.loader.get_source(env, template)[1]
+                        for template in env.list_templates(
+                            filter_func=lambda _path: os.path.splitext(_path)[-1]
+                            in extensions
+                        )
+                    ]
+                )
 
         if not templates:
-            raise OfflineGenerationError("No templates found. Make sure your "
-                                         "TEMPLATE_LOADERS and TEMPLATE_DIRS "
-                                         "settings are correct.")
+            raise OfflineGenerationError(
+                "No templates found. Make sure your "
+                "TEMPLATE_LOADERS and TEMPLATE_DIRS "
+                "settings are correct."
+            )
         if verbosity >= 2:
             log.write("Found templates:\n\t" + "\n\t".join(templates) + "\n")
 
@@ -150,8 +203,10 @@ class Command(BaseCommand):
                 module, function = get_mod_func(contexts)
                 contexts = getattr(import_module(module), function)()
             except (AttributeError, ImportError, TypeError) as e:
-                raise ImportError("Couldn't import offline context function %s: %s" %
-                                  (settings.COMPRESS_OFFLINE_CONTEXT, e))
+                raise ImportError(
+                    "Couldn't import offline context function %s: %s"
+                    % (settings.COMPRESS_OFFLINE_CONTEXT, e)
+                )
         elif not isinstance(contexts, (list, tuple)):
             contexts = [contexts]
 
@@ -172,7 +227,9 @@ class Command(BaseCommand):
                 continue
             except TemplateSyntaxError as e:  # broken template -> ignore
                 if verbosity >= 1:
-                    log.write("Invalid template %s: %s\n" % (template_name, smart_str(e)))
+                    log.write(
+                        "Invalid template %s: %s\n" % (template_name, smart_str(e))
+                    )
                 continue
             except TemplateDoesNotExist:  # non existent template -> ignore
                 if verbosity >= 1:
@@ -180,15 +237,17 @@ class Command(BaseCommand):
                 continue
             except UnicodeDecodeError:
                 if verbosity >= 1:
-                    log.write("UnicodeDecodeError while trying to read "
-                              "template %s\n" % template_name)
+                    log.write(
+                        "UnicodeDecodeError while trying to read "
+                        "template %s\n" % template_name
+                    )
                 continue
 
         contexts_count = 0
         nodes_count = 0
-        block_count = 0
         offline_manifest = OrderedDict()
-        results = []
+        errors = []
+
         for context_dict in contexts:
             compressor_nodes = OrderedDict()
             for template in fine_templates:
@@ -199,58 +258,94 @@ class Command(BaseCommand):
                 except (TemplateDoesNotExist, TemplateSyntaxError) as e:
                     # Could be an error in some base template
                     if verbosity >= 1:
-                        log.write("Error parsing template %s: %s\n" %
-                                  (template.template_name, smart_str(e)))
+                        log.write(
+                            "Error parsing template %s: %s\n"
+                            % (template.template_name, smart_str(e))
+                        )
                     continue
 
                 if nodes:
-                    template_nodes = compressor_nodes.setdefault(template, OrderedDict())
+                    template_nodes = compressor_nodes.setdefault(
+                        template, OrderedDict()
+                    )
                     for node in nodes:
                         nodes_count += 1
                         template_nodes.setdefault(node, []).append(context)
 
+            pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
             for template, nodes in compressor_nodes.items():
                 template._log = log
                 template._log_verbosity = verbosity
 
-                for node, node_contexts in nodes.items():
-                    for context in node_contexts:
-                        context.push()
-                        if not parser.process_template(template, context):
-                            continue
+                pool.submit(
+                    self._compress_template,
+                    offline_manifest,
+                    nodes,
+                    parser,
+                    template,
+                    errors,
+                )
 
-                        parser.process_node(template, context, node)
-                        rendered = parser.render_nodelist(template, context, node)
-                        key = get_offline_hexdigest(rendered)
+            pool.shutdown(wait=True)
+            contexts_count += 1
 
-                        if key in offline_manifest:
-                            continue
-
-                        try:
-                            result = parser.render_node(template, context, node)
-                        except Exception as e:
-                            raise CommandError("An error occurred during rendering %s: "
-                                               "%s" % (template.template_name, smart_str(e)))
-                        result = result.replace(
-                            settings.COMPRESS_URL, settings.COMPRESS_URL_PLACEHOLDER
-                        )
-                        offline_manifest[key] = result
-                        context.pop()
-                        results.append(result)
-                        block_count += 1
-
-        if not nodes_count:
+        # If errors exist, raise the first one in the list
+        if errors:
+            raise errors[0]
+        elif not nodes_count:
             raise OfflineGenerationError(
                 "No 'compress' template tags found in templates."
                 "Try running compress command with --follow-links and/or"
-                "--extension=EXTENSIONS")
+                "--extension=EXTENSIONS"
+            )
 
         if verbosity >= 1:
-            log.write("done\nCompressed %d block(s) from %d template(s) for %d context(s).\n" %
-                      (block_count, nodes_count, contexts_count))
-        return offline_manifest, block_count, results
+            log.write(
+                "done\nCompressed %d block(s) from %d template(s) for %d context(s).\n"
+                % (len(offline_manifest), nodes_count, contexts_count)
+            )
+        return offline_manifest, len(offline_manifest), offline_manifest.values()
 
-    def handle_extensions(self, extensions=('html',)):
+    @staticmethod
+    def _compress_template(offline_manifest, nodes, parser, template, errors):
+        for node, node_contexts in nodes.items():
+            for context in node_contexts:
+                context.push()
+                if not parser.process_template(template, context):
+                    continue
+
+                parser.process_node(template, context, node)
+                rendered = parser.render_nodelist(template, context, node)
+                key = get_offline_hexdigest(rendered)
+
+                # Atomically check if the key exists in offline manifest.
+                # If it doesn't, set a placeholder key (None). This is to prevent
+                # concurrent _compress_template instances from rendering the
+                # same node, and then writing to the same file.
+                with offline_manifest_lock:
+                    if key in offline_manifest:
+                        continue
+
+                    offline_manifest[key] = None
+
+                try:
+                    result = parser.render_node(template, context, node)
+                except Exception as e:
+                    errors.append(
+                        CommandError(
+                            "An error occurred during rendering %s: "
+                            "%s" % (template.template_name, smart_str(e))
+                        )
+                    )
+                    del offline_manifest[key]
+                    return
+                result = result.replace(
+                    settings.COMPRESS_URL, settings.COMPRESS_URL_PLACEHOLDER
+                )
+                offline_manifest[key] = result
+                context.pop()
+
+    def handle_extensions(self, extensions=("html",)):
         """
         organizes multiple extensions that are separated with commas or
         passed by using --extension/-e multiple times.
@@ -265,10 +360,10 @@ class Command(BaseCommand):
         """
         ext_list = []
         for ext in extensions:
-            ext_list.extend(ext.replace(' ', '').split(','))
+            ext_list.extend(ext.replace(" ", "").split(","))
         for i, ext in enumerate(ext_list):
-            if not ext.startswith('.'):
-                ext_list[i] = '.%s' % ext_list[i]
+            if not ext.startswith("."):
+                ext_list[i] = ".%s" % ext_list[i]
         return set(ext_list)
 
     def handle(self, **options):
@@ -278,12 +373,14 @@ class Command(BaseCommand):
         if not settings.COMPRESS_ENABLED and not options.get("force"):
             raise CommandError(
                 "Compressor is disabled. Set the COMPRESS_ENABLED "
-                "setting or use --force to override.")
+                "setting or use --force to override."
+            )
         if not settings.COMPRESS_OFFLINE:
             if not options.get("force"):
                 raise CommandError(
                     "Offline compression is disabled. Set "
-                    "COMPRESS_OFFLINE or use the --force to override.")
+                    "COMPRESS_OFFLINE or use the --force to override."
+                )
 
         log = options.get("log", sys.stdout)
         verbosity = options.get("verbosity", 1)
@@ -295,11 +392,11 @@ class Command(BaseCommand):
         final_block_count = 0
         final_results = []
         for engine in engines:
-            offline_manifest, block_count, results = self.compress(engine, extensions, verbosity, follow_links, log)
+            offline_manifest, block_count, results = self.compress(
+                engine, extensions, verbosity, follow_links, log
+            )
             final_results.extend(results)
             final_block_count += block_count
             final_offline_manifest.update(offline_manifest)
         write_offline_manifest(final_offline_manifest)
         return final_block_count, final_results
-
-Command.requires_system_checks = False
