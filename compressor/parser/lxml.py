@@ -11,6 +11,7 @@ class LxmlParser(ParserBase):
     LxmlParser will use `lxml.html` parser to parse rendered contents of
     {% compress %} tag.
     """
+
     def __init__(self, content):
         try:
             from lxml.html import fromstring
@@ -22,24 +23,26 @@ class LxmlParser(ParserBase):
 
         self.fromstring = fromstring
         self.tostring = tostring
-        super(LxmlParser, self).__init__(content)
+        super().__init__(content)
 
     @cached_property
     def tree(self):
         """
         Document tree.
         """
-        content = '<root>%s</root>' % self.content
+        content = "<root>%s</root>" % self.content
         tree = self.fromstring(content)
         self.tostring(tree, encoding=str)
         return tree
 
     def css_elems(self):
-        return self.tree.xpath('//link[re:test(@rel, "^stylesheet$", "i")]|style',
-            namespaces={"re": "http://exslt.org/regular-expressions"})
+        return self.tree.xpath(
+            '//link[re:test(@rel, "^stylesheet$", "i")]|style',
+            namespaces={"re": "http://exslt.org/regular-expressions"},
+        )
 
     def js_elems(self):
-        return self.tree.findall('script')
+        return self.tree.findall("script")
 
     def elem_attribs(self, elem):
         return elem.attrib
@@ -51,4 +54,4 @@ class LxmlParser(ParserBase):
         return elem.tag
 
     def elem_str(self, elem):
-        return smart_str(self.tostring(elem, method='html', encoding=str))
+        return smart_str(self.tostring(elem, method="html", encoding=str))

@@ -1,7 +1,8 @@
-class ParserBase(object):
+class ParserBase:
     """
     Base parser to be subclassed when creating an own parser.
     """
+
     def __init__(self, content):
         self.content = content
 
